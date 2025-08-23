@@ -5,7 +5,8 @@
 # - SHAP with a compute button
 # - SAFETY RULE: If any Muscle Power is 0/1/2 → show consult message and do not proceed to Week 2
 # - Editable cards for Week 1–6 with friendly labels in the edit dropdowns
-# - NEW: Weeks 2–6 are inside collapsible expanders
+# - Weeks 2–6 inside collapsible expanders
+# - Robust edit-form handling to avoid "Missing Submit Button"
 
 import math
 import numpy as np
@@ -18,7 +19,9 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
+# --------------------
 # CONFIG
+# --------------------
 DATA_PATH = "Cleaned_20240320 (2).xlsx"
 TARGET_FALLBACK_FREQ = "Frequency"
 TARGET_FALLBACK_DUR  = "Duration"
@@ -27,7 +30,9 @@ TARGET_FALLBACK_INT  = "Target HR (bpm)"
 
 st.set_page_config(page_title="Cardiac Rehab Recommendation System", page_icon="🫀", layout="wide")
 
-# Styles =====
+# --------------------
+# Styles
+# --------------------
 st.markdown("""
 <style>
 .small-card{font-size:0.95rem;padding:.6rem .8rem;border:1px solid #e5e7eb;border-radius:.6rem;margin:.35rem 0;background:#fafafa;}
@@ -47,9 +52,9 @@ h1.title-center{
 </style>
 """, unsafe_allow_html=True)
 
-# ==============================
+# --------------------
 # Helpers
-# ==============================
+# --------------------
 FREQ_LEVELS = ["Low", "Medium", "High"]
 FREQ_DISPLAY_MAP = {"Low": "1–2 sessions/week", "Medium": "3–4 sessions/week", "High": "5–6 sessions/week"}
 DUR_LEVELS = ["Short", "Medium", "Long"]
@@ -255,9 +260,9 @@ def weekN_followup(prev_pred, prev_actual, w1_pred, clamp_long_to_medium=True):
             "dur_label": dur_label, "dur_text": dur_text,
             "intensity_bpm": intensity_bpm, "type_label": typ}
 
-# ==============================
+# --------------------
 # Load data & pre-train models
-# ==============================
+# --------------------
 st.markdown('<h1 class="title-center"> AI-Driven Personalized Cardiac Rehabilitation Plan System </h1>', unsafe_allow_html=True)
 
 @st.cache_data(show_spinner=True)
@@ -324,9 +329,9 @@ st.session_state["models"] = {
     "features": features, "df_train": df_train
 }
 
-# ==============================
-# Render helpers (original static + new editable)
-# ==============================
+# --------------------
+# Render helpers
+# --------------------
 def render_week_card(title: str, rec: dict):
     freq_text = rec.get("freq_text", display_freq(rec["freq_label"]))
     dur_text  = rec.get("dur_text",  display_dur(rec["dur_label"]))
@@ -341,23 +346,7 @@ def render_week_card(title: str, rec: dict):
     """
     st.markdown(html, unsafe_allow_html=True)
 
-# ===== NEW: Editable cards with friendly dropdown labels =====
-def _normalize_rec(rec: dict) -> dict:
-    rec = dict(rec)
-    rec["freq_label"] = ensure_freq_bins(rec.get("freq_label", "Medium"))
-    dur_raw = str(rec.get("dur_label", "Medium"))
-    if "Custom(15–30)" in dur_raw or "15-30" in dur_raw:
-        rec["dur_label"] = "Custom(15–30)"
-        rec["dur_text"]  = "15–30 mins"
-    else:
-        rec["dur_label"] = ensure_dur_bins(dur_raw)
-        rec["dur_text"]  = display_dur(rec["dur_label"])
-    rec["freq_text"]     = display_freq(rec["freq_label"])
-    rec["type_label"]    = coerce_type(rec.get("type_label", "Walking"))
-    rec["intensity_bpm"] = int(rec.get("intensity_bpm", 100))
-    return rec
-
-# (label_value, label_shown_to_user)
+# Label mappings for edit UI
 FREQ_EDIT_PAIRS = [
     ("Low",    "Low: 1–2 sessions/week"),
     ("Medium", "Medium: 3–4 sessions/week"),
@@ -376,11 +365,23 @@ DUR_SHOWN_TO_VAL  = {shown: val for val, shown in DUR_EDIT_PAIRS}
 FREQ_VAL_TO_INDEX = {val: i for i, (val, _) in enumerate(FREQ_EDIT_PAIRS)}
 DUR_VAL_TO_INDEX  = {val: i for i, (val, _) in enumerate(DUR_EDIT_PAIRS)}
 
+def _normalize_rec(rec: dict) -> dict:
+    rec = dict(rec)
+    rec["freq_label"] = ensure_freq_bins(rec.get("freq_label", "Medium"))
+    dur_raw = str(rec.get("dur_label", "Medium"))
+    if "Custom(15–30)" in dur_raw or "15-30" in dur_raw:
+        rec["dur_label"] = "Custom(15–30)"
+        rec["dur_text"]  = "15–30 mins"
+    else:
+        rec["dur_label"] = ensure_dur_bins(dur_raw)
+        rec["dur_text"]  = display_dur(rec["dur_label"])
+    rec["freq_text"]     = display_freq(rec["freq_label"])
+    rec["type_label"]    = coerce_type(rec.get("type_label", "Walking"))
+    rec["intensity_bpm"] = int(rec.get("intensity_bpm", 100))
+    return rec
+
+# >>> Hardened edit form (prevents "Missing Submit Button")
 def render_week_card_editable(title: str, week_key: str):
-    """
-    week_key: 'week1'...'week6'.
-    Uses st.session_state[f'{week_key}_pred'] and st.session_state[f'edit_{week_key}'].
-    """
     pred_key = f"{week_key}_pred"
     edit_key = f"edit_{week_key}"
     if pred_key not in st.session_state:
@@ -390,7 +391,6 @@ def render_week_card_editable(title: str, week_key: str):
     rec = st.session_state[pred_key]
 
     if not st.session_state.get(edit_key, False):
-        # VIEW MODE
         html = f"""
         <div class="small-card">
           <h4 class="section-title">{title}</h4>
@@ -404,71 +404,92 @@ def render_week_card_editable(title: str, week_key: str):
         if st.button("Edit", key=f"btn_edit_{week_key}"):
             st.session_state[edit_key] = True
             st.rerun()
-    else:
-        # EDIT MODE
-        with st.form(f"edit_form_{week_key}", clear_on_submit=False):
-            c1, c2 = st.columns(2)
+        return
 
-            # Frequency using friendly labels
-            freq_index = FREQ_VAL_TO_INDEX.get(rec["freq_label"], 1)
-            shown_freq = c1.selectbox(
-                "Frequency",
-                FREQ_EDIT_OPTIONS,
-                index=freq_index,
-                key=f"freq_sel_{week_key}",
-            )
+    # --- EDIT MODE ---
+    with st.form(f"edit_form_{week_key}", clear_on_submit=False):
+        c1, c2 = st.columns(2)
 
-            # Duration using friendly labels (with Custom option)
-            dur_val = rec["dur_label"] if rec["dur_label"] in DUR_VAL_TO_INDEX else ensure_dur_bins(rec["dur_label"])
+        # Frequency
+        try:
+            freq_index = FREQ_VAL_TO_INDEX.get(ensure_freq_bins(rec.get("freq_label", "Medium")), 1)
+        except Exception:
+            freq_index = 1
+        shown_freq = c1.selectbox(
+            "Frequency",
+            FREQ_EDIT_OPTIONS,
+            index=freq_index,
+            key=f"freq_sel_{week_key}",
+        )
+
+        # Duration (supports Custom)
+        try:
+            dur_raw = str(rec.get("dur_label", "Medium"))
+            dur_val = "Custom(15–30)" if "custom" in dur_raw.lower() else ensure_dur_bins(dur_raw)
             dur_index = DUR_VAL_TO_INDEX.get(dur_val, DUR_VAL_TO_INDEX["Medium"])
-            shown_dur = c2.selectbox(
-                "Duration",
-                DUR_EDIT_OPTIONS,
-                index=dur_index,
-                key=f"dur_sel_{week_key}",
-            )
+        except Exception:
+            dur_index = DUR_VAL_TO_INDEX["Medium"]
+        shown_dur = c2.selectbox(
+            "Duration",
+            DUR_EDIT_OPTIONS,
+            index=dur_index,
+            key=f"dur_sel_{week_key}",
+        )
 
-            new_int = st.number_input(
-                "Intensity (bpm)",
-                min_value=40, max_value=220, step=1,
-                value=int(rec["intensity_bpm"]),
-                key=f"int_num_{week_key}"
-            )
-            new_type = st.selectbox(
-                "Type",
-                sorted(list(ALLOWED_TYPES)),
-                index=sorted(list(ALLOWED_TYPES)).index(coerce_type(rec["type_label"])),
-                key=f"type_sel_{week_key}",
-            )
+        # Intensity
+        try:
+            int_default = int(rec.get("intensity_bpm", 100))
+        except Exception:
+            int_default = 100
+        int_default = max(40, min(220, int_default))
+        new_int = st.number_input(
+            "Intensity (bpm)",
+            min_value=40, max_value=220, step=1,
+            value=int_default,
+            key=f"int_num_{week_key}"
+        )
 
-            save = st.form_submit_button("Save")
-            cancel = st.form_submit_button("Cancel")
+        # Type (avoid index errors)
+        choices = sorted(list(ALLOWED_TYPES))
+        try:
+            current_type = coerce_type(rec.get("type_label", "Walking"))
+            idx = choices.index(current_type) if current_type in choices else 0
+        except Exception:
+            idx = 0
+        new_type = st.selectbox(
+            "Type",
+            choices,
+            index=idx,
+            key=f"type_sel_{week_key}",
+        )
 
-        if save:
-            # Map back from shown labels to canonical values
-            new_freq_val = FREQ_SHOWN_TO_VAL[shown_freq]
-            new_dur_val  = DUR_SHOWN_TO_VAL[shown_dur]
+        save = st.form_submit_button("Save")
+        cancel = st.form_submit_button("Cancel")
 
-            rec["freq_label"]    = ensure_freq_bins(new_freq_val)
-            rec["dur_label"]     = new_dur_val
+    if save:
+        try:
+            rec["freq_label"]    = ensure_freq_bins(FREQ_SHOWN_TO_VAL.get(shown_freq, "Medium"))
+            rec["dur_label"]     = DUR_SHOWN_TO_VAL.get(shown_dur, "Medium")
             rec["intensity_bpm"] = int(new_int)
             rec["type_label"]    = coerce_type(new_type)
 
-            rec["freq_text"]     = display_freq(rec["freq_label"])
-            rec["dur_text"]      = "15–30 mins" if new_dur_val == "Custom(15–30)" else display_dur(ensure_dur_bins(new_dur_val))
+            rec["freq_text"] = display_freq(rec["freq_label"])
+            rec["dur_text"]  = "15–30 mins" if rec["dur_label"] == "Custom(15–30)" else display_dur(ensure_dur_bins(rec["dur_label"]))
 
             st.session_state[pred_key] = rec
             st.session_state[edit_key] = False
             st.success("Saved.")
             st.rerun()
+        except Exception as e:
+            st.error(f"Could not save changes: {e}")
 
-        if cancel:
-            st.session_state[edit_key] = False
-            st.rerun()
+    if cancel:
+        st.session_state[edit_key] = False
+        st.rerun()
 
-# ==============================
+# --------------------
 # Predictors
-# ==============================
+# --------------------
 def predict_week1_from_features(feature_values: dict) -> dict:
     m = st.session_state["models"]
     X_row = coerce_row_from_widgets(feature_values, m["df_train"], m["features"])
@@ -484,9 +505,9 @@ def predict_week1_from_features(feature_values: dict) -> dict:
             "intensity_bpm": intensity_bpm, "type_label": type_label,
             "features_input": dict(feature_values)}
 
-# ==============================
+# --------------------
 # Layout
-# ==============================
+# --------------------
 left, right = st.columns([1.1, 0.9])
 
 def bounds_for_feature(name: str, default_low: int, default_high: int):
@@ -502,9 +523,9 @@ def bounds_for_feature(name: str, default_low: int, default_high: int):
     return int(default_low), int(default_high)
 
 with left:
-    # ==============================
+    # --------------------
     # WEEK 1 — Inputs -> Recommendation
-    # ==============================
+    # --------------------
     st.markdown("### Week 1 - Enter Patient Details")
 
     with st.form("week1_form", clear_on_submit=False):
@@ -591,9 +612,9 @@ with left:
     if "week1_pred" in st.session_state:
         render_week_card_editable("Week 1 Exercise Recommendation", "week1")
 
-    # ==============================
+    # --------------------
     # Weeks 2–6 (EXPANDERS)
-    # ==============================
+    # --------------------
     with st.expander("Week 2 - Actual Week 1 Exercise Done", expanded=False):
         if "week1_pred" not in st.session_state or st.session_state.get("blocked_by_mpower"):
             st.info("Week 2 will be available after a valid Week 1 recommendation.")
@@ -685,9 +706,9 @@ with left:
                 render_week_card_editable("Week 6 Exercise Recommendation", "week6")
 
 with right:
-    # ==============================
+    # --------------------
     # Counterfactual (What-if)
-    # ==============================
+    # --------------------
     st.markdown("### What-if Simulator (Counterfactual)")
     if "week1_pred" not in st.session_state or st.session_state.get("blocked_by_mpower"):
         st.info("Generate a valid Week 1 recommendation first, then you can run counterfactuals.")
@@ -729,108 +750,112 @@ with right:
             st.write("**Baseline Recommendation**");       render_week_card("Baseline Recommendation", base_w1)
             st.write("**Counterfactual Recommendation**"); render_week_card("Counterfactual Recommendation", cf_w1)
 
-    # ==============================
+    # --------------------
     # SHAP with dropdown + button
-    # ==============================
+    # --------------------
     st.markdown("---")
     st.markdown("### SHAP Explainability")
     if "week1_pred" not in st.session_state or st.session_state.get("blocked_by_mpower"):
         st.info("Generate a valid Week 1 recommendation first to explain it with SHAP.")
     else:
-        import shap, matplotlib.pyplot as plt
+        try:
+            import shap, matplotlib.pyplot as plt
+        except ModuleNotFoundError:
+            st.warning("SHAP isn’t installed. Run `pip install shap` and reload the app.")
+            plt = None
+            shap = None
 
-        def _to_scalar(x, default=0.0):
-            try:
-                return float(np.asarray(x).squeeze().item())
-            except Exception:
-                arr = np.asarray(x).squeeze()
-                return float(arr.flat[0]) if arr.size else float(default)
+        if shap is not None and plt is not None:
+            def _to_scalar(x, default=0.0):
+                try:
+                    return float(np.asarray(x).squeeze().item())
+                except Exception:
+                    arr = np.asarray(x).squeeze()
+                    return float(arr.flat[0]) if arr.size else float(default)
 
-        def _ravel1d(x):
-            return np.asarray(x).reshape(-1)  # force 1-D
+            def _ravel1d(x):
+                return np.asarray(x).reshape(-1)  # force 1-D
 
-        m = st.session_state["models"]
-        model_choice = st.selectbox("Select prediction to explain:",
-                                    ["Intensity (bpm)", "Frequency", "Duration", "Type"])
-        do_shap = st.button("Compute SHAP Explanation")
+            m = st.session_state["models"]
+            model_choice = st.selectbox("Select prediction to explain:",
+                                        ["Intensity (bpm)", "Frequency", "Duration", "Type"])
+            do_shap = st.button("Compute SHAP Explanation")
 
-        if do_shap:
-            try:
-                if model_choice == "Intensity (bpm)":
-                    pipe = m["reg_int"]; is_classifier = False; inv = None
-                elif model_choice == "Frequency":
-                    pipe = m["clf_freq"]; is_classifier = True; inv = m["le_freq"].inverse_transform
-                elif model_choice == "Duration":
-                    pipe = m["clf_dur"];  is_classifier = True; inv = m["le_dur"].inverse_transform
-                else:
-                    pipe = m["clf_type"]; is_classifier = True; inv = m["le_type"].inverse_transform
+            if do_shap:
+                try:
+                    if model_choice == "Intensity (bpm)":
+                        pipe = m["reg_int"]; is_classifier = False; inv = None
+                    elif model_choice == "Frequency":
+                        pipe = m["clf_freq"]; is_classifier = True; inv = m["le_freq"].inverse_transform
+                    elif model_choice == "Duration":
+                        pipe = m["clf_dur"];  is_classifier = True; inv = m["le_dur"].inverse_transform
+                    else:
+                        pipe = m["clf_type"]; is_classifier = True; inv = m["le_type"].inverse_transform
 
-                pre: ColumnTransformer = pipe.named_steps["pre"]
-                est = pipe.named_steps["rf"]
+                    pre: ColumnTransformer = pipe.named_steps["pre"]
+                    est = pipe.named_steps["rf"]
 
-                X_train = m["df_train"][m["features"]]
-                bg = pre.transform(X_train.sample(min(200, len(X_train)), random_state=42))
-                x0_df = pd.DataFrame([st.session_state["week1_pred"]["features_input"]], columns=m["features"])
-                x0 = pre.transform(x0_df)
+                    X_train = m["df_train"][m["features"]]
+                    bg = pre.transform(X_train.sample(min(200, len(X_train)), random_state=42))
+                    x0_df = pd.DataFrame([st.session_state["week1_pred"]["features_input"]], columns=m["features"])
+                    x0 = pre.transform(x0_df)
 
-                if is_classifier:
-                    pred_idx = int(pipe.predict(x0_df)[0])
-                    pred_label = inv([pred_idx])[0]
-                else:
-                    pred_val = _to_scalar(pipe.predict(x0_df)[0])
+                    if is_classifier:
+                        pred_idx = int(pipe.predict(x0_df)[0])
+                        pred_label = inv([pred_idx])[0]
+                    else:
+                        pred_val = _to_scalar(pipe.predict(x0_df)[0])
 
-                explainer = shap.TreeExplainer(est, data=bg, feature_perturbation="interventional")
-                shap_vals = explainer.shap_values(x0, check_additivity=False)
+                    explainer = shap.TreeExplainer(est, data=bg, feature_perturbation="interventional")
+                    shap_vals = explainer.shap_values(x0, check_additivity=False)
 
-                raw_names = pre.get_feature_names_out(m["features"])
-                nice_names = [friendly_name(n.split("__", 1)[-1]) for n in raw_names]
-                nice_names = list(nice_names)
+                    raw_names = pre.get_feature_names_out(m["features"])
+                    nice_names = [friendly_name(n.split("__", 1)[-1]) for n in raw_names]
+                    nice_names = list(nice_names)
 
-                if is_classifier:
-                    if isinstance(shap_vals, list):
-                        shap_vec = _ravel1d(shap_vals[pred_idx])
-                        base_val = _to_scalar(np.asarray(explainer.expected_value)[pred_idx])
+                    if is_classifier:
+                        if isinstance(shap_vals, list):
+                            shap_vec = _ravel1d(shap_vals[pred_idx])
+                            base_val = _to_scalar(np.asarray(explainer.expected_value)[pred_idx])
+                        else:
+                            shap_vec = _ravel1d(shap_vals)
+                            base_val = _to_scalar(explainer.expected_value)
+                        caption = f"Predicted: **{pred_label}** • Baseline = {base_val:.3f}"
                     else:
                         shap_vec = _ravel1d(shap_vals)
                         base_val = _to_scalar(explainer.expected_value)
-                    caption = f"Predicted: **{pred_label}** • Baseline = {base_val:.3f}"
-                else:
-                    shap_vec = _ravel1d(shap_vals)
-                    base_val = _to_scalar(explainer.expected_value)
-                    caption = f"Predicted intensity = **{int(pred_val)} bpm** • Baseline = {base_val:.1f}"
+                        caption = f"Predicted intensity = **{int(pred_val)} bpm** • Baseline = {base_val:.1f}"
 
-                x0_vals = _ravel1d(x0_df.iloc[0].values)
-                L = min(len(nice_names), len(shap_vec), len(x0_vals))
-                nice_names, shap_vec, x0_vals = nice_names[:L], shap_vec[:L], x0_vals[:L]
+                    x0_vals = _ravel1d(x0_df.iloc[0].values)
+                    L = min(len(nice_names), len(shap_vec), len(x0_vals))
+                    nice_names, shap_vec, x0_vals = nice_names[:L], shap_vec[:L], x0_vals[:L]
 
-                contrib = pd.DataFrame({
-                    "Feature": nice_names,
-                    "SHAP value": shap_vec,
-                    "Abs SHAP": np.abs(shap_vec),
-                    "Value": x0_vals
-                }).sort_values("Abs SHAP", ascending=False).reset_index(drop=True)
+                    contrib = pd.DataFrame({
+                        "Feature": nice_names,
+                        "SHAP value": shap_vec,
+                        "Abs SHAP": np.abs(shap_vec),
+                        "Value": x0_vals
+                    }).sort_values("Abs SHAP", ascending=False).reset_index(drop=True)
 
-                st.caption(caption)
+                    st.caption(caption)
 
-                topN = min(10, len(contrib))
-                fig, ax = plt.subplots()
-                sub = contrib.head(topN).iloc[::-1]
-                ax.barh(sub["Feature"], sub["SHAP value"])
-                ax.set_xlabel("SHAP value (impact on prediction)")
-                ax.set_ylabel("")
-                title = "Top factors driving predicted " + ("intensity" if not is_classifier else model_choice.lower())
-                ax.set_title(title)
-                st.pyplot(fig, clear_figure=True)
+                    topN = min(10, len(contrib))
+                    fig, ax = plt.subplots()
+                    sub = contrib.head(topN).iloc[::-1]
+                    ax.barh(sub["Feature"], sub["SHAP value"])
+                    ax.set_xlabel("SHAP value (impact on prediction)")
+                    ax.set_ylabel("")
+                    title = "Top factors driving predicted " + ("intensity" if not is_classifier else model_choice.lower())
+                    ax.set_title(title)
+                    st.pyplot(fig, clear_figure=True)
 
-                st.dataframe(contrib.drop(columns=["Abs SHAP"]).head(25))
-            except ModuleNotFoundError:
-                st.warning("SHAP isn’t installed. Run `pip install shap` and reload the app.")
-            except Exception as e:
-                st.error(f"SHAP explanation failed: {e}")
+                    st.dataframe(contrib.drop(columns=["Abs SHAP"]).head(25))
+                except Exception as e:
+                    st.error(f"SHAP explanation failed: {e}")
 
-# ==============================
-# Patient Info + Counterfactual + SHAP Explanations (Bottom wording)
-# ==============================
+# --------------------
+# Bottom info
+# --------------------
 st.markdown("---")
 st.markdown("### Get To Know...")
 st.markdown("""
@@ -875,7 +900,3 @@ SHAP (SHapley Additive exPlanations) shows which inputs most influenced a predic
 The chart ranks top drivers; the table shows SHAP values alongside your actual inputs.  
 This helps explain *why* the AI suggested a specific frequency, duration, intensity, or type.
 """)
-
-# Footer
-st.markdown("---")
-st.caption("Copyright © Rishma Fathima Basher (S2006759)")
