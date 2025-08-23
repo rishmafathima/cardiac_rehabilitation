@@ -1,5 +1,0 @@
-Prediction Task,Accuracy,Weighted Precision,Weighted F1-score,MAE,RMSE,R2
-Frequency,0.4462,0.4348,0.4369,—,—,—
-Duration,0.7385,0.64,0.6725,—,—,—
-Type,0.5385,0.5364,0.5369,—,—,—
-Intensity (bpm),—,—,—,6.0556,10.1365,0.5757
